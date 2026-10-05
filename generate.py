@@ -1,122 +1,87 @@
 import os
 import json
 import random
-from datetime import datetime
-import anthropic
 import requests
+from anthropic import Anthropic
 
-# --- Config ---
-SYSTEM_PROMPT = open("system_prompt.txt", "r", encoding="utf-8").read()
+REQUIRED_KEYS = ["instagram", "pinterest", "twitter", "tiktok_idea", "youtube_short", "linkedin"]
 
-with open("temas.json", "r", encoding="utf-8") as f:
-    config = json.load(f)
 
-tema_hoy = random.choice(config["temas"])
-plataforma_cta = random.choice(config["plataformas_cta"])
+def leer_tema():
+    with open("system_prompt.txt", "r", encoding="utf-8") as f:
+        system_prompt = f.read()
 
-user_prompt = f"""Genera contenido para el día de hoy con este enfoque específico: {tema_hoy}
+    with open("temas.json", "r", encoding="utf-8") as f:
+        temas_data = json.load(f)
 
-Plataforma a priorizar hoy con link real: {plataforma_cta}"""
+    tema = random.choice(temas_data["temas"])
+    return system_prompt, tema
 
-# --- Llamada a Claude ---
-client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-response = client.messages.create(
-    model="claude-sonnet-4-6",
-    max_tokens=2000,
-    system=SYSTEM_PROMPT,
-    messages=[{"role": "user", "content": user_prompt}]
-)
+def generar_contenido(system_prompt, tema):
+    client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
 
-raw_text = response.content[0].text.strip()
-raw_text = raw_text.replace("```json", "").replace("```", "").strip()
+    mensaje = client.messages.create(
+        model="claude-sonnet-4-6",
+        max_tokens=2000,
+        system=system_prompt,
+        messages=[
+            {
+                "role": "user",
+                "content": f"Tema de hoy: {tema}\n\nGenera el contenido en el formato JSON indicado en las instrucciones.",
+            }
+        ],
+    )
 
-try:
-    data = json.loads(raw_text)
-except json.JSONDecodeError as e:
-    print("Error parseando JSON:", e)
-    print("Contenido recibido:", raw_text)
-    raise
+    texto = mensaje.content[0].text.strip()
 
-# --- Crear un Issue en GitHub con el contenido para revisar ---
-fecha = datetime.now().strftime("%Y-%m-%d")
+    # Por si Claude envuelve la respuesta en backticks de markdown pese a las instrucciones
+    if texto.startswith("```"):
+        texto = texto.split("```")[1]
+        if texto.startswith("json"):
+            texto = texto[4:]
+        texto = texto.strip()
 
-yt = data.get("youtube_short", {})
-guion_yt = yt.get("guion_voz_en_off") or "— (formato timelapse silencioso, sin voz)"
+    contenido = json.loads(texto)
 
-cuerpo = f"""## Tema del día: {tema_hoy}
-**Plataforma con CTA hoy:** {plataforma_cta}
+    faltantes = [k for k in REQUIRED_KEYS if k not in contenido]
+    if faltantes:
+        raise ValueError(f"Respuesta incompleta, faltan claves: {faltantes}")
 
-### 📸 Instagram
-**Caption:**
-{data['instagram']['caption']}
+    return contenido
 
-**Hashtags:** {', '.join(data['instagram']['hashtags'])}
 
-**Idea de imagen:** {data['instagram']['image_idea']}
+def crear_issue(tema, contenido):
+    repo = os.environ["GITHUB_REPOSITORY"]
+    token = os.environ["GITHUB_TOKEN"]
 
----
+    url = f"https://api.github.com/repos/{repo}/issues"
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Accept": "application/vnd.github+json",
+    }
 
-### 📌 Pinterest
-**Título:** {data['pinterest']['title']}
+    cuerpo = f"## Tema: {tema}\n\n"
+    for plataforma in REQUIRED_KEYS:
+        cuerpo += f"### {plataforma}\n{contenido[plataforma]}\n\n"
 
-**Descripción:** {data['pinterest']['description']}
+    payload = {
+        "title": f"Contenido social — {tema[:60]}",
+        "body": cuerpo,
+        "labels": ["contenido-social", "revision-pendiente"],
+    }
 
-**Idea de imagen:** {data['pinterest']['image_idea']}
+    resp = requests.post(url, headers=headers, json=payload)
+    resp.raise_for_status()
+    print(f"✅ Issue creado: {resp.json()['html_url']}")
 
----
 
-### 🐦 X / Twitter
-{data['twitter']['text']}
+def main():
+    system_prompt, tema = leer_tema()
+    print(f"📝 Tema elegido: {tema}")
+    contenido = generar_contenido(system_prompt, tema)
+    crear_issue(tema, contenido)
 
-**Idea de imagen:** {data['twitter']['image_idea']}
 
----
-
-### 🎵 TikTok (idea)
-**Concepto:** {data['tiktok_idea']['concept']}
-
-**Audio sugerido:** {data['tiktok_idea']['audio_suggestion']}
-
-**Texto en pantalla:** {data['tiktok_idea']['text_overlay']}
-
----
-
-### 🎥 YouTube Short ({yt.get('format', 'no especificado')})
-**Duración estimada:** {yt.get('duracion_estimada', '-')}
-
-**Guion voz en off:**
-{guion_yt}
-
-**Texto en pantalla:** {yt.get('texto_pantalla', '-')}
-
-**Audio/música:** {yt.get('sugerencia_audio', '-')}
-
-**Descripción del vídeo:** {yt.get('cta_descripcion', '-')}
-
----
-
-### 💼 LinkedIn
-{data['linkedin']['text']}
-
-**Idea de imagen:** {data['linkedin']['image_idea']}
-"""
-
-repo = os.environ["GITHUB_REPOSITORY"]  # viene automático en Actions, formato "usuario/repo"
-token = os.environ["GITHUB_TOKEN"]
-
-url = f"https://api.github.com/repos/{repo}/issues"
-headers = {
-    "Authorization": f"Bearer {token}",
-    "Accept": "application/vnd.github+json"
-}
-payload = {
-    "title": f"📱 Posts del {fecha} — {tema_hoy}",
-    "body": cuerpo,
-    "labels": ["contenido-pendiente"]
-}
-
-resp = requests.post(url, headers=headers, json=payload)
-resp.raise_for_status()
-
-print(f"Issue creado correctamente: {resp.json()['html_url']}")
+if __name__ == "__main__":
+    main()
