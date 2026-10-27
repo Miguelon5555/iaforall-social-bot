@@ -18,37 +18,56 @@ def leer_tema():
     return system_prompt, tema
 
 
-def generar_contenido(system_prompt, tema):
+def extraer_json(texto):
+    texto = texto.strip()
+    inicio, fin = texto.find("{"), texto.rfind("}")
+    if inicio == -1 or fin == -1:
+        raise ValueError("La respuesta no contiene un objeto JSON")
+    # strict=False tolera saltos de línea reales dentro de los textos
+    return json.loads(texto[inicio : fin + 1], strict=False)
+
+
+def generar_contenido(system_prompt, tema, intentos=3):
     client = Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+    ultimo_error = None
 
-    mensaje = client.messages.create(
-        model="claude-sonnet-4-6",
-        max_tokens=2000,
-        system=system_prompt,
-        messages=[
-            {
-                "role": "user",
-                "content": f"Tema de hoy: {tema}\n\nGenera el contenido en el formato JSON indicado en las instrucciones.",
-            }
-        ],
-    )
+    for n in range(1, intentos + 1):
+        mensaje = client.messages.create(
+            model="claude-sonnet-4-6",
+            max_tokens=4500,
+            system=system_prompt,
+            messages=[
+                {
+                    "role": "user",
+                    "content": f"Tema de hoy: {tema}\n\nGenera el contenido en el formato JSON indicado en las instrucciones.",
+                }
+            ],
+        )
+        texto = mensaje.content[0].text
 
-    texto = mensaje.content[0].text.strip()
+        try:
+            if mensaje.stop_reason == "max_tokens":
+                raise ValueError("La respuesta se cortó por longitud (max_tokens)")
+            contenido = extraer_json(texto)
 
-    # Por si Claude envuelve la respuesta en backticks de markdown pese a las instrucciones
-    if texto.startswith("```"):
-        texto = texto.split("```")[1]
-        if texto.startswith("json"):
-            texto = texto[4:]
-        texto = texto.strip()
+            faltantes = [k for k in REQUIRED_KEYS if k not in contenido]
+            if faltantes:
+                raise ValueError(f"Respuesta incompleta, faltan claves: {faltantes}")
 
-    contenido = json.loads(texto)
+            # Si alguna pieza llega como lista (p. ej. los tweets), se une en texto
+            for k in REQUIRED_KEYS:
+                v = contenido[k]
+                if isinstance(v, list):
+                    contenido[k] = "\n\n".join(str(x) for x in v)
+                elif not isinstance(v, str):
+                    contenido[k] = str(v)
+            return contenido
+        except Exception as e:
+            ultimo_error = e
+            print(f"⚠️ Intento {n}/{intentos} no válido: {e}")
+            print(f"   stop_reason={mensaje.stop_reason}; inicio de la respuesta: {texto[:300]!r}")
 
-    faltantes = [k for k in REQUIRED_KEYS if k not in contenido]
-    if faltantes:
-        raise ValueError(f"Respuesta incompleta, faltan claves: {faltantes}")
-
-    return contenido
+    raise RuntimeError(f"No se pudo generar contenido válido: {ultimo_error}")
 
 
 def crear_issue(tema, contenido):
