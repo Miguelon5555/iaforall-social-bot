@@ -61,12 +61,18 @@ def crear_issue(tema, contenido):
         "Accept": "application/vnd.github+json",
     }
 
-    cuerpo = f"## Tema: {tema}\n\n"
+    lineas_tema = tema.splitlines() or [tema]
+    cabecera = lineas_tema[0]
+    detalle = "\n".join(lineas_tema[1:]).strip()
+
+    cuerpo = f"## Tema: {cabecera}\n\n"
+    if detalle:
+        cuerpo += f"<details><summary>Datos del tema</summary>\n\n{detalle}\n\n</details>\n\n"
     for plataforma in REQUIRED_KEYS:
         cuerpo += f"### {plataforma}\n{contenido[plataforma]}\n\n"
 
     payload = {
-        "title": f"Contenido social — {tema[:60]}",
+        "title": f"Contenido social — {cabecera[:60]}",
         "body": cuerpo,
         "labels": ["contenido-social", "revision-pendiente"],
     }
