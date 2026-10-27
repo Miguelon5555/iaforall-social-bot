@@ -7,10 +7,19 @@ Reconstruye temas.json antes de cada ejecución del bot social, combinando:
 Ejecútalo como paso previo a generate.py en el workflow de GitHub Actions.
 """
 
+import html
 import json
+import os
 import random
+import re
 import urllib.request
 import urllib.parse
+
+# Guías originales publicadas en el blog (las genera el repo ia-para-todos)
+SITE = "https://iaforall.netlify.app"
+GUIAS_JSON_URL = "https://raw.githubusercontent.com/Miguelon5555/ia-para-todos/refs/heads/main/guias.json"
+GUIA_PAGINA_URL = "https://raw.githubusercontent.com/Miguelon5555/ia-para-todos/refs/heads/main/prompts/{slug}/index.html"
+CADA_N_NO_GUIA = 3  # 2 de cada 3 ejecuciones promocionan una guía; la tercera habla de otra cosa
 
 # Mismos feeds que RSS_FEEDS en app.js del blog
 RSS_FEEDS = [
@@ -77,19 +86,87 @@ def obtener_noticia_fresca():
     return None
 
 
+def descargar(url, timeout=15):
+    req = urllib.request.Request(url, headers={"User-Agent": "iaforall-social-bot/1.0"})
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        return resp.read().decode("utf-8")
+
+
+def obtener_guias():
+    """Lista de guías publicadas (guias.json del blog). Si falla, devuelve []."""
+    try:
+        guias = json.loads(descargar(GUIAS_JSON_URL))
+        return [g for g in guias if re.fullmatch(r"[a-z0-9]+(-[a-z0-9]+)*", g.get("slug", ""))]
+    except Exception as e:
+        print(f"⚠️ No se pudo leer guias.json: {e}")
+        return []
+
+
+def limpiar_html(fragmento):
+    return " ".join(html.unescape(re.sub(r"<[^>]+>", " ", fragmento)).split())
+
+
+def leer_detalle_guia(slug):
+    """Devuelve (resumen, prompt) leyendo la página real de la guía."""
+    try:
+        pagina = descargar(GUIA_PAGINA_URL.format(slug=slug))
+    except Exception as e:
+        print(f"⚠️ No se pudo leer la guía {slug}: {e}")
+        return None, None
+    resumen = re.search(r'<p class="resumen">(.*?)</p>', pagina, re.S)
+    prompt = re.search(r'<pre id="prompt-principal"[^>]*>(.*?)</pre>', pagina, re.S)
+    return (
+        limpiar_html(resumen.group(1)) if resumen else None,
+        html.unescape(prompt.group(1)).strip() if prompt else None,
+    )
+
+
+def tema_de_guia_para_hoy():
+    """Elige una guía (rotando entre todas) y la convierte en tema. None si hoy toca otra cosa."""
+    guias = obtener_guias()
+    if not guias:
+        return None
+
+    run = int(os.environ.get("GITHUB_RUN_NUMBER", "1"))
+    if run % CADA_N_NO_GUIA == 0:
+        print("ℹ️ Hoy toca hablar de otra cosa que no sea una guía")
+        return None
+
+    guia = guias[(run - run // CADA_N_NO_GUIA) % len(guias)]
+    resumen, prompt = leer_detalle_guia(guia["slug"])
+    if not resumen:  # sin el contenido real de la guía, no se inventa nada
+        return None
+
+    url = f"{SITE}/prompts/{guia['slug']}/"
+    lineas = [
+        f"Guía del blog: «{guia['titulo']}»",
+        f"URL de la guía (usa EXACTAMENTE esta dirección en los enlaces): {url}",
+        f"Categoría: {guia.get('categoria', '')}",
+        f"Resumen de la guía: {resumen}",
+    ]
+    if prompt:
+        lineas.append(f"Prompt de la guía (puedes citarlo tal cual):\n{prompt}")
+    print(f"📘 Se promociona la guía: {guia['slug']}")
+    return "\n".join(lineas)
+
+
 def construir_temas():
     temas = []
 
-    noticia = obtener_noticia_fresca()
-    if noticia:
-        temas.append(noticia)
+    tema_guia = tema_de_guia_para_hoy()
+    if tema_guia:
+        temas.append(tema_guia)
     else:
-        print("⚠️ Ningún feed respondió, se omite la noticia de hoy")
+        noticia = obtener_noticia_fresca()
+        if noticia:
+            temas.append(noticia)
+        else:
+            print("⚠️ Ningún feed respondió, se omite la noticia de hoy")
 
-    # Un tutorial, una app y un prompt al azar para variar cada ejecución
-    temas.append("Tutorial: " + random.choice(TUTORIALES))
-    temas.append("App recomendada: " + random.choice(APPS))
-    temas.append("Prompt útil: " + random.choice(PROMPTS))
+        # Un tutorial, una app y un prompt al azar para variar cada ejecución
+        temas.append("Tutorial: " + random.choice(TUTORIALES))
+        temas.append("App recomendada: " + random.choice(APPS))
+        temas.append("Prompt útil: " + random.choice(PROMPTS))
 
     salida = {
         "temas": temas,
