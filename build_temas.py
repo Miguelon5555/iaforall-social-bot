@@ -12,6 +12,7 @@ import json
 import os
 import random
 import re
+import time
 import urllib.request
 import urllib.parse
 
@@ -19,7 +20,10 @@ import urllib.parse
 SITE = "https://iaforall.netlify.app"
 GUIAS_JSON_URL = "https://raw.githubusercontent.com/Miguelon5555/ia-para-todos/refs/heads/main/guias.json"
 GUIA_PAGINA_URL = "https://raw.githubusercontent.com/Miguelon5555/ia-para-todos/refs/heads/main/prompts/{slug}/index.html"
-CADA_N_NO_GUIA = 3  # 2 de cada 3 ejecuciones promocionan una guía; la tercera habla de otra cosa
+# True = el bot solo promociona guías publicadas (el único contenido propio al que puede enviar con honestidad).
+# Cuando el blog tenga páginas propias de noticias/tutoriales/apps, cámbialo a False.
+SOLO_GUIAS = True
+CADA_N_NO_GUIA = 3  # Solo se usa con SOLO_GUIAS = False: 2 de cada 3 ejecuciones promocionan una guía
 
 # Mismos feeds que RSS_FEEDS en app.js del blog
 RSS_FEEDS = [
@@ -86,10 +90,18 @@ def obtener_noticia_fresca():
     return None
 
 
-def descargar(url, timeout=15):
+def descargar(url, timeout=15, intentos=3):
     req = urllib.request.Request(url, headers={"User-Agent": "iaforall-social-bot/1.0"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp:
-        return resp.read().decode("utf-8")
+    ultimo_error = None
+    for n in range(intentos):
+        try:
+            with urllib.request.urlopen(req, timeout=timeout) as resp:
+                return resp.read().decode("utf-8")
+        except Exception as e:
+            ultimo_error = e
+            if n < intentos - 1:
+                time.sleep(2)
+    raise ultimo_error
 
 
 def obtener_guias():
@@ -107,17 +119,29 @@ def limpiar_html(fragmento):
 
 
 def leer_detalle_guia(slug):
-    """Devuelve (resumen, prompt) leyendo la página real de la guía."""
+    """Devuelve (resumen, prompt, incluye) leyendo la página real de la guía."""
     try:
         pagina = descargar(GUIA_PAGINA_URL.format(slug=slug))
     except Exception as e:
         print(f"⚠️ No se pudo leer la guía {slug}: {e}")
-        return None, None
+        return None, None, None
     resumen = re.search(r'<p class="resumen">(.*?)</p>', pagina, re.S)
     prompt = re.search(r'<pre id="prompt-principal"[^>]*>(.*?)</pre>', pagina, re.S)
+
+    # Qué contiene realmente la guía (para que los posts no prometan de más)
+    secciones = [limpiar_html(x) for x in re.findall(r"<h2>(.*?)</h2>", pagina, re.S)]
+    secciones = [x for x in secciones if x and x != "Más guías"]
+    incluye = ", ".join(secciones)
+    m = re.search(r"<h2>Variantes[^<]*</h2>(.*?)<h2>", pagina, re.S)
+    if m:
+        variantes = [limpiar_html(x) for x in re.findall(r"<h3>(.*?)</h3>", m.group(1), re.S)]
+        if variantes:
+            incluye += ". Variantes del prompt: " + "; ".join(variantes)
+
     return (
         limpiar_html(resumen.group(1)) if resumen else None,
         html.unescape(prompt.group(1)).strip() if prompt else None,
+        incluye or None,
     )
 
 
@@ -128,12 +152,14 @@ def tema_de_guia_para_hoy():
         return None
 
     run = int(os.environ.get("GITHUB_RUN_NUMBER", "1"))
-    if run % CADA_N_NO_GUIA == 0:
-        print("ℹ️ Hoy toca hablar de otra cosa que no sea una guía")
-        return None
-
-    guia = guias[(run - run // CADA_N_NO_GUIA) % len(guias)]
-    resumen, prompt = leer_detalle_guia(guia["slug"])
+    if SOLO_GUIAS:
+        guia = guias[run % len(guias)]
+    else:
+        if run % CADA_N_NO_GUIA == 0:
+            print("ℹ️ Hoy toca hablar de otra cosa que no sea una guía")
+            return None
+        guia = guias[(run - run // CADA_N_NO_GUIA) % len(guias)]
+    resumen, prompt, incluye = leer_detalle_guia(guia["slug"])
     if not resumen:  # sin el contenido real de la guía, no se inventa nada
         return None
 
@@ -144,6 +170,8 @@ def tema_de_guia_para_hoy():
         f"Categoría: {guia.get('categoria', '')}",
         f"Resumen de la guía: {resumen}",
     ]
+    if incluye:
+        lineas.append(f"Qué incluye la guía (descríbela solo con esto): {incluye}")
     if prompt:
         lineas.append(f"Prompt de la guía (puedes citarlo tal cual):\n{prompt}")
     print(f"📘 Se promociona la guía: {guia['slug']}")
@@ -156,6 +184,11 @@ def construir_temas():
     tema_guia = tema_de_guia_para_hoy()
     if tema_guia:
         temas.append(tema_guia)
+    elif SOLO_GUIAS:
+        raise SystemExit(
+            "❌ No se pudo leer ninguna guía del blog (guias.json o la página de la guía). "
+            "No se genera contenido para no prometer páginas que no existen. Vuelve a lanzar el workflow."
+        )
     else:
         noticia = obtener_noticia_fresca()
         if noticia:
