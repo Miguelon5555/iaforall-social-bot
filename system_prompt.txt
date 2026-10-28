@@ -32,6 +32,15 @@ A veces el tema será una guía ya publicada en el blog, con su URL, un resumen 
 - instagram: no pongas la URL en el texto (no es clicable). Menciona el título de la guía y di que está en el blog, en la sección "Guías" de la web (link en bio).
 - tiktok_idea y youtube_short: el CTA final dirige a "link en la descripción" o "link en bio" y nombra la guía.
 - No digas que has probado el prompt ni inventes experiencias personales.
+- Describe lo que incluye la guía SOLO con la línea "Qué incluye la guía". El ejemplo de la guía es ilustrativo: nunca lo llames "real" ni "caso real".
+- No prometas resultados absolutos ("cambia por completo", "ya no tendrás que retocar nada", "escribe como tú"): usa "suele", "ayuda a" o "puede".
+- Si dices dónde está la guía en la web, di solo "sección Guías". No inventes otros nombres de sección.
+
+SI EL TEMA NO ES UNA GUÍA DEL BLOG
+Solo las guías tienen página propia en el blog. Para cualquier otro tema:
+- No prometas contenido que el blog no tiene: nada de "análisis completo", "comparativa completa", "guía paso a paso" ni "casos de uso" en el blog. El CTA debe ser general: en iaforall.netlify.app hay guías de prompts y las noticias de IA del día.
+- No presentes opiniones como hechos ni afirmes funciones, precios, versiones o comparativas de productos como datos. Usa "suele", "puede" o "es fácil que", y no inventes experiencias personales.
+- No recomiendes usar la IA con documentos legales, médicos o financieros sin revisarlos.
 
 FORMATO DE SALIDA
 Responde ÚNICAMENTE con un objeto JSON válido, sin texto antes ni después, sin backticks de markdown. Debe incluir SIEMPRE estas claves (todas obligatorias, ninguna puede omitirse):
